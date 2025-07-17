@@ -1,0 +1,176 @@
+---
+title: "Alexis Grayon"
+author: "Food environment and EDCs"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+<style type="text/css">
+.main-container {
+  max-width: 100% !important;
+  margin: auto;
+}
+</style>
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, include = FALSE}
+library(tidyverse)
+library(Hmisc)
+library(sf) # underlies a lot of spatial mapping
+library(RColorBrewer)
+library(corrr) # correlations
+library(spdep) # spatial
+library(sfdep)
+library(cartogram)
+library(GGally)
+library(openxlsx)
+library(ggspatial)
+library(classInt)
+library(biscale)
+library(leaflet)
+library(leaflet.extras)
+library(htmlwidgets)
+```
+
+```{r, include = F}
+map_data <- st_read('./source_files/neighborhoods_data.shp')
+
+pop_up = ~paste0('<b>Census tract: </b>', br_2010, '<br>',
+                 '<b>Participants: </b>', censs_n, '<br><br>',
+                 '<b>Food environment prevalence</b> <br>',
+                 '<i>Fast food: </i>', round(ff_onem, 2), '%', '<br>',
+                 '<i>Convenience stores: </i>', round(bo_onem, 2), '%', '<br><br>',
+                 '<b>Average chemical metabolite levels</b> <br>',
+                 '<i>Sum LMW: </i>', round(lmw_avg, 2), ' nmol/L', '<br>',
+                 '<i>Sum HMW: </i>', round(hmw_avg, 2), ' nmol/L', '<br>',
+                 '<i>Sum FP: </i>', round(fd_ph_v, 2), ' nmol/L', '<br>',
+                 '<i>Sum BP: </i>', round(bp_avg, 2), ' nmol/L')
+
+# basic add-ons
+map <- leaflet() %>% 
+  addProviderTiles("Esri.WorldGrayCanvas") %>% 
+  setView(lng = -73.949242, lat = 40.701010, zoom = 11) %>% 
+  addPolygons(data = map_data,
+              color = "black", 
+              weight = 0.5,   # line width 
+              fillColor = 'white', opacity = 1, fillOpacity = 1,
+              group = 'Census tracts', popup = pop_up)
+
+# set up food
+centroids <- st_centroid(map_data)
+coords <- st_coordinates(centroids)
+
+classIntervals(map_data$ff_onem, n = 4, style = "quantile")$brks
+ff_pal <- colorBin(palette = c('#d3d3d3', '#c2a0a6', '#b16d79', '#9e3547'),
+                     domain = map_data$ff_onem,
+                     bins = c(39.4353, 51.26531, 61.50943, 71.11931, 100.00),
+                     reverse = FALSE, na.color = NA)
+
+classIntervals(map_data$bo_onem, n = 4, style = "quantile")$brks
+bo_pal <- colorBin(palette = c('#d3d3d3', '#c2a0a6', '#b16d79', '#9e3547'),
+                     domain = map_data$bo_onem,
+                     bins = c(56.06692, 75.86207, 80.09950, 84.87185, 100.00),
+                     reverse = FALSE, na.color = NA)
+
+map <- map %>% 
+   addCircleMarkers(data = map_data, lng = coords[,1], lat = coords[,2],
+                    color = 'black', weight = 0.2, opacity = 1, fillColor = ~ff_pal(map_data$ff_onem),
+                    fillOpacity = 1, radius = map_data$ff_qtil,
+                    group = 'Fast Food') %>% 
+  addLegend(pal = ff_pal,
+            values = round(map_data$ff_onem, 1),
+            title = "Fast Food", 
+            position = "bottomright", na.label = element_blank(),
+            opacity = 1, group = 'Fast Food') %>% 
+  addLayersControl(baseGroups = c('Fast Food'), options = layersControlOptions(collapsed = FALSE)) %>% 
+  addCircleMarkers(data = map_data, lng = coords[,1], lat = coords[,2],
+                    color = 'black', weight = 0.2, opacity = 1, fillColor = ~bo_pal(map_data$bo_onem),
+                    fillOpacity = 1, radius = map_data$bo_qtil,
+                    group = 'Convenience Store') %>% 
+    addLegend(pal = bo_pal,
+            values = paste0(map_data$bo_onem),
+            title = "Convenience Store", 
+            position = "bottomright", na.label = element_blank(),
+            opacity = 1, group = 'Convenience Store') %>% 
+  addLayersControl(baseGroup = c('Fast Food', 'Convenience Store'), options = layersControlOptions(collapsed = FALSE))  %>%
+  htmlwidgets::onRender("
+    function(el, x) {
+      var updateLegend = function () {
+          var selectedGroup = document.querySelectorAll('input:checked')[0].nextSibling.innerText.substr(1);
+
+          document.querySelectorAll('.legend').forEach(a => a.hidden=true);
+          document.querySelectorAll('.legend').forEach(l => {
+            if (l.children[0].children[0].innerText == selectedGroup) l.hidden=false;
+          });
+      };
+      updateLegend();
+      this.on('baselayerchange', e => updateLegend());
+    }")
+
+# now chems
+classIntervals(map_data$lmw_avg, n = 4, style = "quantile")$brks
+pal_lmw <- colorBin(palette = c('#d3d3d3', '#a3b5c7', '#7397bb', '#4279b0'),
+                    domain = map_data$lmw_avg,
+                    bins = c(2.345679, 5.211313, 5.737775, 6.373437, 9.583487),
+                    reverse = FALSE, na.color = NA)
+
+classIntervals(map_data$hmw_avg, n = 4, style = "quantile")$brks
+pal_hmw <- colorBin(palette = c('#d3d3d3', '#a3b5c7', '#7397bb', '#4279b0'),
+                    domain = map_data$hmw_avg,
+                    bins = c(1.722607, 3.732741, 4.1736403, 4.617024, 8.986433),
+                    reverse = FALSE, na.color = NA)
+
+classIntervals(map_data$fd_ph_v, n = 4, style = "quantile")$brks
+pal_fp <- colorBin(palette = c('#d3d3d3', '#a3b5c7', '#7397bb', '#4279b0'),
+                    domain = map_data$fd_ph_v,
+                    bins = c(2.250675, 4.472372, 4.843507, 5.286142, 9.079501),
+                    reverse = FALSE, na.color = NA)
+
+classIntervals(map_data$bp_avg, n = 4, style = "quantile")$brks
+pal_bp <- colorBin(palette = c('#d3d3d3', '#a3b5c7', '#7397bb', '#4279b0'),
+                    domain = map_data$fd_ph_v,
+                    bins = c(-1.015078, 1.243984, 1.715903, 2.254230, 5.750999),
+                    reverse = FALSE, na.color = NA)
+
+map <- map %>% 
+  addPolygons(data = map_data,
+              color = "black",
+              weight = 0.5,   # line width 
+              fillColor = ~pal_lmw(lmw_avg),
+              fillOpacity = 0.35,
+              popup = pop_up,
+              group = 'LMW Phthalates') %>% 
+    addPolygons(data = map_data,
+              color = "black",
+              weight = 0.5,   # line width 
+              fillColor = ~pal_hmw(hmw_avg),
+              fillOpacity = 0.35,
+              popup = pop_up,
+              group = 'HMW Phthalates') %>% 
+      addPolygons(data = map_data,
+              color = "black",
+              weight = 0.5,   # line width 
+              fillColor = ~pal_fp(fd_ph_v),
+              fillOpacity = 0.35,
+              popup = pop_up,
+              group = 'Food Packaging Phthalates') %>% 
+      addPolygons(data = map_data,
+              color = "black",
+              weight = 0.5,   # line width 
+              fillColor = ~pal_bp(bp_avg),
+              fillOpacity = 0.35,
+              popup = pop_up,
+              group = 'Bisphenols') %>% 
+  addLayersControl(baseGroup = c('Fast Food', 'Convenience Store'), overlayGroups = c('LMW Phthalates', 'HMW Phthalates', 'Food Packaging Phthalates', 'Bisphenols'), options = layersControlOptions(collapsed = FALSE)) %>% hideGroup(c('HMW Phthalates', 'Food Packaging Phthalates', 'Bisphenols'))
+```
+
+## **Interactive map display**
+```{r, echo=FALSE, out.width = '100%'}
+map 
+```
+
+*Citation: [Can insert here]*
